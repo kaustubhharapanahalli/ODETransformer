@@ -59,29 +59,25 @@ odetransformer/
 
 ### Standard Training
 
-![Standard Training Loss](results_standard/training_loss.png)
+![Standard Training Loss](images/standard_training_loss.png)
 
 ### Physics-Informed Training
 
-![Physics-Informed Training Loss](results_physics/training_loss.png)
+![Physics-Informed Training Loss](images/physics_informed_training_loss.png)
 
-### Combined Training
+### Combined Model
 
-![Combined Training Loss](results_combined/training_loss.png)
+![Combined Model Prediction](images/model_comparison.png)
 
 ## Evaluation
 
 ### Standard Model
 
-![Standard Model Prediction](results_standard/predictions.png)
+![Standard Model Prediction](images/standard_predictions.png)
 
 ### Physics-Informed Model
 
-![Physics-Informed Model Prediction](results_physics/predictions.png)
-
-### Combined Model
-
-![Combined Model Prediction](results_combined/predictions.png)
+![Physics-Informed Model Prediction](images/physics_informed_predictions.png)
 
 ## Conclusion
 

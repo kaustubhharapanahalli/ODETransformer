@@ -16,6 +16,7 @@ The physics-informed version enforces physical relationships between motion vari
 
 ## Project Structure
 
+```bash
 odetransformer/
 ├── architecture/
 ├── dataset/
@@ -23,6 +24,7 @@ odetransformer/
 ├── main_physics.py
 ├── main_combined.py
 └── README.md
+```
 
 ## Installation
 

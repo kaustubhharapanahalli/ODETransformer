@@ -3,16 +3,31 @@ import torch.nn as nn
 
 
 class VehicleMotionTransformer(nn.Module):
+    """
+    Transformer model for predicting vehicle motion trajectories.
+
+    This model takes time sequences and context parameters as input to predict the vehicle's
+    displacement, velocity, and acceleration over time. It uses a transformer architecture
+    to capture temporal dependencies in the motion.
+
+    Args:
+        d_model (int): Dimension of the model's internal representations. Default: 16
+        num_heads (int): Number of attention heads in transformer layers. Default: 2
+        num_layers (int): Number of transformer encoder layers. Default: 2
+    """
+
     def __init__(self, d_model=16, num_heads=2, num_layers=2):
         super().__init__()
-        # Embed a single time scalar into a d_model-dimensional vector.
+        # Time embedding: maps scalar time values to d_model dimensions
         self.time_embedding = nn.Linear(1, d_model)
-        # Embed the context vector (which includes [x0, v0, A, omega, m]) into d_model dimensions.
+
+        # Context embedding: maps 5D context vector [x₀, v₀, A, ω, m] to d_model dimensions
         self.context_embedding = nn.Linear(5, d_model)
-        # After concatenating the time and context embeddings, project back to d_model.
+
+        # Projects concatenated embeddings back to d_model dimensions
         self.input_projection = nn.Linear(2 * d_model, d_model)
 
-        # Transformer encoder layers.
+        # Transformer encoder for processing temporal sequences
         encoder_layer = nn.TransformerEncoderLayer(
             d_model=d_model, nhead=num_heads
         )
@@ -20,35 +35,46 @@ class VehicleMotionTransformer(nn.Module):
             encoder_layer, num_layers=num_layers
         )
 
-        # Final layer to predict 3 outputs: displacement, velocity, acceleration.
+        # Output projection to predict [x, v, a] at each timestep
         self.output_layer = nn.Linear(d_model, 3)
 
     def forward(self, time_seq, context):
         """
-        Args:
-            time_seq: Tensor of shape (batch, seq_len, 1)
-            context: Tensor of shape (batch, 5)
-        Returns:
-            Tensor of shape (batch, seq_len, 3)
-        """
-        # Embed the time sequence.
-        time_emb = self.time_embedding(time_seq)  # (batch, seq_len, d_model)
+        Forward pass of the model.
 
-        # Embed the context and expand it along the sequence dimension.
-        context_emb = self.context_embedding(context)  # (batch, d_model)
+        Args:
+            time_seq (torch.Tensor): Time sequence tensor of shape (batch, seq_len, 1)
+            context (torch.Tensor): Context parameters tensor of shape (batch, 5) containing
+                                  initial conditions and physical parameters [x₀, v₀, A, ω, m]
+
+        Returns:
+            torch.Tensor: Predicted motion states of shape (batch, seq_len, 3) containing
+                         [displacement, velocity, acceleration] for each timestep
+        """
+        # Embed time sequence to higher dimensions
+        time_emb = self.time_embedding(
+            time_seq
+        )  # Shape: (batch, seq_len, d_model)
+
+        # Embed context and broadcast along sequence dimension
+        context_emb = self.context_embedding(
+            context
+        )  # Shape: (batch, d_model)
         context_emb_expanded = context_emb.unsqueeze(1).expand(
             -1, time_seq.size(1), -1
-        )
+        )  # Shape: (batch, seq_len, d_model)
 
-        # Concatenate the time and context embeddings.
+        # Combine time and context information
         combined = torch.cat([time_emb, context_emb_expanded], dim=-1)
         combined = self.input_projection(combined)
 
-        # Transformer expects input of shape (seq_len, batch, d_model)
-        combined = combined.permute(1, 0, 2)
+        # Process through transformer (requires seq_len first)
+        combined = combined.permute(
+            1, 0, 2
+        )  # Shape: (seq_len, batch, d_model)
         encoded = self.transformer_encoder(combined)
-        encoded = encoded.permute(1, 0, 2)  # (batch, seq_len, d_model)
+        encoded = encoded.permute(1, 0, 2)  # Shape: (batch, seq_len, d_model)
 
-        # Project to the outputs (displacement, velocity, acceleration)
-        output = self.output_layer(encoded)
+        # Generate final predictions
+        output = self.output_layer(encoded)  # Shape: (batch, seq_len, 3)
         return output

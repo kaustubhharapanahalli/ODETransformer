@@ -1,3 +1,25 @@
+"""
+Main training script for vehicle motion prediction using a Transformer model.
+
+This module implements the core training loop and utilities for training a transformer model
+to predict vehicle motion (displacement, velocity, acceleration) given initial conditions
+and parameters. Key components include:
+
+- Data generation and preprocessing
+- Model training and validation loops
+- Checkpointing and model saving
+- Training visualization and metrics tracking
+- Model evaluation and prediction plotting
+
+The training process includes:
+- Data normalization
+- Train/val/test splitting
+- Gradient clipping for stability
+- Learning rate optimization with AdamW
+- Model checkpointing based on validation loss
+- Progress tracking and visualization
+"""
+
 import json
 import os
 from pathlib import Path
@@ -16,20 +38,29 @@ from torch.utils.data import DataLoader
 from torchinfo import summary
 from tqdm import tqdm
 
-NUM_SAMPLES = 10000
-T = 10
-NUM_POINTS = 1000
-BATCH_SIZE = 32
-LEARNING_RATE = 1e-4
-NUM_EPOCHS = 20
-GRAD_CLIP_VALUE = 1.0
+# Training hyperparameters
+NUM_SAMPLES = 10000  # Total number of trajectories to generate
+T = 10  # Time duration in seconds
+NUM_POINTS = 1000  # Number of timesteps per trajectory
+BATCH_SIZE = 32  # Batch size for training
+LEARNING_RATE = 1e-4  # Learning rate for optimizer
+NUM_EPOCHS = 20  # Number of training epochs
+GRAD_CLIP_VALUE = 1.0  # Maximum gradient norm for clipping
 
 
 def count_parameters(model):
+    """Count number of trainable parameters in the model."""
     return sum(p.numel() for p in model.parameters() if p.requires_grad)
 
 
 def plot_training_history(history, save_dir):
+    """
+    Plot and save training and validation loss curves.
+
+    Args:
+        history (dict): Dictionary containing training metrics
+        save_dir (str): Directory to save the plot
+    """
     plt.figure(figsize=(10, 6))
     plt.plot(history["train_loss"], label="Training Loss")
     plt.plot(history["val_loss"], label="Validation Loss")
@@ -46,6 +77,17 @@ def plot_training_history(history, save_dir):
 def plot_predictions(
     pred, target, time_seq, save_dir, state_mean=None, state_std=None
 ):
+    """
+    Plot and save model predictions against ground truth.
+
+    Args:
+        pred (np.ndarray): Model predictions
+        target (np.ndarray): Ground truth values
+        time_seq (np.ndarray): Time points
+        save_dir (str): Directory to save the plot
+        state_mean (np.ndarray, optional): Mean for denormalization
+        state_std (np.ndarray, optional): Standard deviation for denormalization
+    """
     # Denormalize predictions and target if normalization parameters are provided
     if state_mean is not None and state_std is not None:
         pred = pred * state_std + state_mean
@@ -69,6 +111,20 @@ def plot_predictions(
 
 
 def save_checkpoint(model, optimizer, epoch, loss, best_loss, save_dir):
+    """
+    Save model checkpoint and return updated best loss.
+
+    Args:
+        model: The neural network model
+        optimizer: The optimizer
+        epoch (int): Current epoch number
+        loss (float): Current loss value
+        best_loss (float): Best loss value so far
+        save_dir (str): Directory to save checkpoints
+
+    Returns:
+        float: Updated best loss value
+    """
     Path(save_dir).mkdir(parents=True, exist_ok=True)
 
     checkpoint = {
@@ -88,6 +144,18 @@ def save_checkpoint(model, optimizer, epoch, loss, best_loss, save_dir):
 
 
 def validate(model, val_dataloader, criterion, device):
+    """
+    Run validation loop and compute average validation loss.
+
+    Args:
+        model: The neural network model
+        val_dataloader: DataLoader for validation data
+        criterion: Loss function
+        device: Device to run validation on
+
+    Returns:
+        float: Average validation loss
+    """
     model.eval()
     total_val_loss = 0.0
 
@@ -105,6 +173,18 @@ def validate(model, val_dataloader, criterion, device):
 
 
 def main():
+    """
+    Main training function that orchestrates the entire training process.
+
+    Steps:
+    1. Set up device and directories
+    2. Generate and preprocess data
+    3. Create data loaders
+    4. Initialize model, optimizer, and loss
+    5. Train model with validation
+    6. Save checkpoints and visualizations
+    7. Evaluate model on test sample
+    """
     # Set device
     if torch.backends.mps.is_available():
         device = torch.device("mps")
@@ -137,6 +217,7 @@ def main():
     print("State mean: ", state_mean)
     print("State std: ", state_std)
 
+    # Split data into train/val/test sets
     indices = np.arange(NUM_SAMPLES)
     np.random.shuffle(indices)
     train_end = int(NUM_SAMPLES * 0.8)
@@ -162,6 +243,7 @@ def main():
     print("Shape of val_states: ", val_states.shape)
     print("Shape of test_states: ", test_states.shape)
 
+    # Create datasets and dataloaders
     train_dataset = VehicleMotionDataset(
         train_contexts,
         time_seq,
@@ -229,6 +311,7 @@ def main():
 
     print("Training Transformer for Vehicle Motion...")
 
+    # Initialize training history
     history = {
         "train_loss": [],
         "val_loss": [],
@@ -238,6 +321,7 @@ def main():
 
     epoch_pbar = tqdm(range(NUM_EPOCHS), desc="Training Progress")
 
+    # Training loop
     for epoch in epoch_pbar:
         # Training phase
         model.train()
@@ -282,6 +366,7 @@ def main():
             }
         )
 
+        # Periodic saving and visualization
         if (epoch + 1) % 5 == 0:
             # Save checkpoint based on validation loss
             if avg_val_loss < history["best_val_loss"]:
@@ -300,6 +385,7 @@ def main():
                 json.dump(history, f, indent=4)
             plot_training_history(history, save_dir)
 
+    # Final evaluation
     print("\nEvaluating model on a sample...")
     model.eval()
     with torch.no_grad():

@@ -1,3 +1,21 @@
+"""
+Physics-informed neural network training for vehicle motion prediction.
+
+This module implements training of a transformer model to predict vehicle motion
+with physics-informed loss terms. The model learns to predict displacement, velocity
+and acceleration while respecting the underlying physics equations.
+
+Key components:
+- Data generation and preprocessing
+- Model training with combined data and physics losses
+- Validation and model checkpointing
+- Visualization of training progress and predictions
+
+The physics loss enforces:
+dx/dt = v (velocity is derivative of position)
+dv/dt = a (acceleration is derivative of velocity)
+"""
+
 import json
 import os
 from pathlib import Path
@@ -16,20 +34,32 @@ from torch.utils.data import DataLoader
 from torchinfo import summary
 from tqdm import tqdm
 
-NUM_SAMPLES = 10000
-T = 10
-NUM_POINTS = 1000
-BATCH_SIZE = 32
-LEARNING_RATE = 1e-4
-NUM_EPOCHS = 20
-GRAD_CLIP_VALUE = 1.0
+# Training hyperparameters
+NUM_SAMPLES = 10000  # Total number of trajectories to generate
+T = 10  # Time duration in seconds
+NUM_POINTS = 1000  # Number of timesteps per trajectory
+BATCH_SIZE = 32  # Batch size for training
+LEARNING_RATE = 1e-4  # Learning rate for optimizer
+NUM_EPOCHS = 20  # Number of training epochs
+GRAD_CLIP_VALUE = 1.0  # Maximum gradient norm for clipping
 
 
 def count_parameters(model):
+    """Count number of trainable parameters in the model."""
     return sum(p.numel() for p in model.parameters() if p.requires_grad)
 
 
 def plot_training_history(history, save_dir):
+    """
+    Plot and save training and validation loss curves.
+
+    Args:
+        history (dict): Dictionary containing training metrics
+        save_dir (str): Directory to save the plot
+    """
+    # Create save directory if it doesn't exist
+    Path(save_dir).mkdir(parents=True, exist_ok=True)
+
     plt.figure(figsize=(10, 6))
     plt.plot(history["train_loss"], label="Training Loss")
     plt.plot(history["val_loss"], label="Validation Loss")
@@ -46,6 +76,20 @@ def plot_training_history(history, save_dir):
 def plot_predictions(
     pred, target, time_seq, save_dir, state_mean=None, state_std=None
 ):
+    """
+    Plot and save model predictions against ground truth.
+
+    Args:
+        pred (np.ndarray): Model predictions
+        target (np.ndarray): Ground truth values
+        time_seq (np.ndarray): Time points
+        save_dir (str): Directory to save the plot
+        state_mean (np.ndarray, optional): Mean for denormalization
+        state_std (np.ndarray, optional): Standard deviation for denormalization
+    """
+    # Create save directory if it doesn't exist
+    Path(save_dir).mkdir(parents=True, exist_ok=True)
+
     # Denormalize predictions and target if normalization parameters are provided
     if state_mean is not None and state_std is not None:
         pred = pred * state_std + state_mean
@@ -69,6 +113,20 @@ def plot_predictions(
 
 
 def save_checkpoint(model, optimizer, epoch, loss, best_loss, save_dir):
+    """
+    Save model checkpoint and return updated best loss.
+
+    Args:
+        model: The neural network model
+        optimizer: The optimizer
+        epoch (int): Current epoch number
+        loss (float): Current loss value
+        best_loss (float): Best loss value so far
+        save_dir (str): Directory to save checkpoints
+
+    Returns:
+        float: Updated best loss value
+    """
     Path(save_dir).mkdir(parents=True, exist_ok=True)
 
     checkpoint = {
@@ -88,6 +146,18 @@ def save_checkpoint(model, optimizer, epoch, loss, best_loss, save_dir):
 
 
 def validate(model, val_dataloader, criterion, device):
+    """
+    Validate model on validation dataset.
+
+    Args:
+        model: The neural network model
+        val_dataloader: DataLoader for validation data
+        criterion: Loss function
+        device: Device to run validation on
+
+    Returns:
+        float: Average validation loss
+    """
     model.eval()
     total_val_loss = 0.0
 
@@ -105,6 +175,13 @@ def validate(model, val_dataloader, criterion, device):
 
 
 def main():
+    """
+    Main training function that:
+    1. Sets up device and directories
+    2. Generates and preprocesses data
+    3. Creates and trains the model
+    4. Evaluates and saves results
+    """
     # Set device
     if torch.backends.mps.is_available():
         device = torch.device("mps")
@@ -241,23 +318,27 @@ def main():
             context = context.to(device)
             target = target.to(device)
 
-            t_seq.requires_grad_(True)
+            t_seq.requires_grad_(
+                True
+            )  # Enable gradient computation for physics loss
 
             optimizer.zero_grad()
             pred = model(t_seq, context)
 
+            # Standard MSE loss on predictions
             data_loss = data_criterion(pred, target)
 
             # Physics-informed loss computation
-            x_pred = pred[..., 0]
-            v_pred = pred[..., 1]
-            a_pred = pred[..., 2]
+            x_pred = pred[..., 0]  # Displacement predictions
+            v_pred = pred[..., 1]  # Velocity predictions
+            a_pred = pred[..., 2]  # Acceleration predictions
 
             B, T_steps = x_pred.shape
             t_flat = t_seq.view(-1)
             x_flat = x_pred.view(-1)
             v_flat = v_pred.view(-1)
 
+            # Compute gradients for physics constraints
             grad_x = torch.autograd.grad(
                 x_flat,
                 t_flat,
@@ -284,13 +365,16 @@ def main():
             grad_x = grad_x.view(B, T_steps)
             grad_v = grad_v.view(B, T_steps)
 
+            # Physics residuals: dx/dt = v, dv/dt = a
             res_x = grad_x - v_pred
             res_v = grad_v - a_pred
             physics_loss = res_x.pow(2).mean() + res_v.pow(2).mean()
 
+            # Combined loss
             loss = data_loss + lambda_phy * physics_loss
             loss.backward()
 
+            # Gradient clipping for stability
             torch.nn.utils.clip_grad_norm_(model.parameters(), GRAD_CLIP_VALUE)
             optimizer.step()
 
@@ -314,6 +398,7 @@ def main():
             }
         )
 
+        # Save checkpoints and plots periodically
         if (epoch + 1) % 5 == 0:
             history["best_loss"] = save_checkpoint(
                 model,
@@ -328,6 +413,7 @@ def main():
                 json.dump(history, f, indent=4)
             plot_training_history(history, save_dir)
 
+    # Final evaluation
     print("\nEvaluating model on a sample...")
     model.eval()
     with torch.no_grad():

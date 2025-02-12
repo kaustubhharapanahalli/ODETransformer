@@ -11,6 +11,9 @@ torch = "^2.6.0"
 scipy = "^1.15.1"
 torchvision = "^0.21.0"
 numpy = "^2.2.2"
+tqdm = "^4.67.1"
+torchinfo = "^1.8.0"
+matplotlib = "^3.10.0"
 
 
 [build-system]

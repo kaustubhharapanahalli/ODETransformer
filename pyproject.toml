@@ -1,0 +1,18 @@
+[tool.poetry]
+name = "odetransformer"
+version = "0.1.0"
+description = ""
+authors = ["Kaustubh Harapanahalli <kaustubhharapanahalli@gmail.com>"]
+readme = "README.md"
+
+[tool.poetry.dependencies]
+python = "^3.10"
+torch = "^2.6.0"
+scipy = "^1.15.1"
+torchvision = "^0.21.0"
+numpy = "^2.2.2"
+
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"

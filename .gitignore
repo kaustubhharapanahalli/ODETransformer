@@ -148,3 +148,4 @@ data/
 *.caffemodel
 *.npy
 *.npz
+experiments/

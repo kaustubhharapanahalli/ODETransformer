@@ -74,7 +74,3 @@ odetransformer/
 ### Physics-Informed Model
 
 ![Physics-Informed Model Prediction](images/physics_informed_predictions.png)
-
-## Conclusion
-
-The ODE Transformer model demonstrates improved performance with physics-informed training, capturing physical relationships between motion variables. Standard supervised learning alone shows limited accuracy, while combined training achieves the best results.

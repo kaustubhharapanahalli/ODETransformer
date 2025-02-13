@@ -11,8 +11,8 @@ The ODE Transformer model predicts vehicle motion (position, velocity, accelerat
 
 The physics-informed version enforces physical relationships between motion variables:
 
-- dx/dt = v (velocity is derivative of position)
-- dv/dt = a (acceleration is derivative of velocity)
+- $dx/dt = v$ (velocity is derivative of position)
+- $dv/dt = a$ (acceleration is derivative of velocity)
 
 ## Project Structure
 
@@ -64,10 +64,6 @@ odetransformer/
 ### Physics-Informed Training
 
 ![Physics-Informed Training Loss](images/physics_informed_training_loss.png)
-
-### Combined Model
-
-![Combined Model Prediction](images/model_comparison.png)
 
 ## Evaluation
 

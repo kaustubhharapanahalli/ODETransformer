@@ -17,12 +17,6 @@ The physics-informed model enforces physical constraints:
 - dv/dt = a (acceleration is derivative of velocity)
 """
 
-import argparse
-import json
-import os
-from pathlib import Path
-
-import matplotlib.pyplot as plt
 import numpy as np
 import torch
 import torch.nn as nn
@@ -33,312 +27,9 @@ from dataset.generator import (
     generate_vehicle_motion_data,
 )
 from torch.utils.data import DataLoader
-from torchinfo import summary
-from tqdm import tqdm
-from utilities.utilities import (
-    count_parameters,
-    create_experiment_folder,
-    plot_predictions,
-    plot_training_comparison,
-    plot_training_history,
-    save_checkpoint,
-)
-
-# Training hyperparameters
-GRAD_CLIP_VALUE = 1.0  # Maximum gradient norm for clipping
-LAMBDA_PHY = 0.1  # Weight for physics-informed loss term
-
-
-def validate(model, val_dataloader, criterion, device, physics_informed=False):
-    """
-    Validate model on validation dataset.
-
-    Args:
-        model: The neural network model
-        val_dataloader: DataLoader for validation data
-        criterion: Loss function
-        device: Device to run validation on
-        physics_informed (bool): Whether using physics-informed approach
-
-    Returns:
-        float: Average validation loss
-    """
-    model.eval()
-    total_val_loss = 0.0
-
-    with torch.no_grad():
-        for t_seq, context, target in val_dataloader:
-            t_seq = t_seq.to(device)
-            context = context.to(device)
-            target = target.to(device)
-
-            pred = model(t_seq, context)
-            if physics_informed:
-                loss = criterion(
-                    pred, target
-                )  # Only use data loss for validation
-            else:
-                loss = criterion(pred, target)
-            total_val_loss += loss.item()
-
-    return total_val_loss / len(val_dataloader)
-
-
-def train_epoch(
-    model,
-    train_dataloader,
-    optimizer,
-    criterion,
-    device,
-    physics_informed=False,
-):
-    """
-    Train model for one epoch.
-
-    Args:
-        model: The neural network model
-        train_dataloader: DataLoader for training data
-        optimizer: The optimizer
-        criterion: Loss function
-        device: Device to run training on
-        physics_informed (bool): Whether to use physics-informed approach
-
-    Returns:
-        float: Average training loss for the epoch
-    """
-    model.train()
-    total_train_loss = 0.0
-
-    batch_pbar = tqdm(
-        train_dataloader,
-        desc="Training batch",
-        leave=False,
-    )
-
-    for t_seq, context, target in batch_pbar:
-        t_seq = t_seq.to(device)
-        context = context.to(device)
-        target = target.to(device)
-
-        if physics_informed:
-            t_seq.requires_grad_(True)
-
-        optimizer.zero_grad()
-        pred = model(t_seq, context)
-
-        data_loss = criterion(pred, target)
-
-        if physics_informed:
-            # Physics-informed loss computation
-            x_pred, v_pred, a_pred = pred[..., 0], pred[..., 1], pred[..., 2]
-            B, T_steps = x_pred.shape
-            t_flat = t_seq.view(-1)
-            x_flat, v_flat = x_pred.view(-1), v_pred.view(-1)
-
-            # Compute gradients for physics constraints
-            grad_x = torch.autograd.grad(
-                x_flat,
-                t_flat,
-                grad_outputs=torch.ones_like(x_flat),
-                create_graph=True,
-                retain_graph=True,
-                allow_unused=True,
-            )[0]
-            grad_v = torch.autograd.grad(
-                v_flat,
-                t_flat,
-                grad_outputs=torch.ones_like(v_flat),
-                create_graph=True,
-                retain_graph=True,
-                allow_unused=True,
-            )[0]
-
-            grad_x = torch.zeros_like(x_flat) if grad_x is None else grad_x
-            grad_v = torch.zeros_like(v_flat) if grad_v is None else grad_v
-
-            grad_x = grad_x.view(B, T_steps)
-            grad_v = grad_v.view(B, T_steps)
-
-            # Physics residuals
-            res_x = grad_x - v_pred  # dx/dt = v
-            res_v = grad_v - a_pred  # dv/dt = a
-            physics_loss = res_x.pow(2).mean() + res_v.pow(2).mean()
-            loss = data_loss + LAMBDA_PHY * physics_loss
-        else:
-            loss = data_loss
-
-        loss.backward()
-        torch.nn.utils.clip_grad_norm_(model.parameters(), GRAD_CLIP_VALUE)
-        optimizer.step()
-
-        total_train_loss += loss.item()
-        batch_pbar.set_postfix({"batch_loss": f"{loss.item():.6f}"})
-
-    return total_train_loss / len(train_dataloader)
-
-
-def train_model(
-    model_type,
-    model,
-    train_dataloader,
-    val_dataloader,
-    optimizer,
-    criterion,
-    device,
-    hyperparameters,
-    physics_informed=False,
-):
-    """
-    Train model for multiple epochs with experiment tracking.
-
-    Args:
-        model_type (str): Type of model being trained
-        model: The neural network model
-        train_dataloader: DataLoader for training data
-        val_dataloader: DataLoader for validation data
-        optimizer: The optimizer
-        criterion: Loss function
-        device: Device to run training on
-        hyperparameters (dict): Dictionary of training hyperparameters
-        physics_informed (bool): Whether to use physics-informed approach
-
-    Returns:
-        tuple: Training history, trained model, and experiment directory
-    """
-    # Create experiment directory
-    save_dir = create_experiment_folder(
-        model_type, hyperparameters, physics_informed
-    )
-
-    history = {
-        "train_loss": [],
-        "val_loss": [],
-        "best_loss": float("inf"),
-        "best_val_loss": float("inf"),
-    }
-
-    epoch_pbar = tqdm(
-        range(hyperparameters["NUM_EPOCHS"]),
-        desc=f"{model_type} Training Progress",
-    )
-
-    for epoch in epoch_pbar:
-        avg_train_loss = train_epoch(
-            model,
-            train_dataloader,
-            optimizer,
-            criterion,
-            device,
-            physics_informed,
-        )
-
-        avg_val_loss = validate(
-            model, val_dataloader, criterion, device, physics_informed
-        )
-
-        history["train_loss"].append(avg_train_loss)
-        history["val_loss"].append(avg_val_loss)
-
-        epoch_pbar.set_postfix(
-            {
-                "train_loss": f"{avg_train_loss:.6f}",
-                "val_loss": f"{avg_val_loss:.6f}",
-            }
-        )
-
-        if (epoch + 1) % 5 == 0:
-            history["best_loss"] = save_checkpoint(
-                model,
-                optimizer,
-                epoch,
-                avg_train_loss,
-                history["best_loss"],
-                f"{save_dir}/checkpoints",
-            )
-
-            # Save training history
-            with open(f"{save_dir}/metrics/training_history.json", "w") as f:
-                json.dump(history, f, indent=4)
-
-            # Plot and save training curves
-            plot_training_history(history, f"{save_dir}/plots", model_type)
-
-    return history, model, save_dir
-
-
-def parse_args():
-    """Parse command line arguments."""
-    parser = argparse.ArgumentParser(
-        description="Train standard and physics-informed vehicle motion prediction models"
-    )
-
-    # Data generation parameters
-    parser.add_argument(
-        "--num-samples",
-        type=int,
-        default=10000,
-        help="Total number of trajectories to generate",
-    )
-    parser.add_argument(
-        "--time-duration",
-        type=float,
-        default=10,
-        help="Time duration in seconds",
-    )
-    parser.add_argument(
-        "--num-points",
-        type=int,
-        default=1000,
-        help="Number of timesteps per trajectory",
-    )
-
-    # Training parameters
-    parser.add_argument(
-        "--batch-size", type=int, default=32, help="Batch size for training"
-    )
-    parser.add_argument(
-        "--learning-rate",
-        type=float,
-        default=1e-3,
-        help="Learning rate for optimizer",
-    )
-    parser.add_argument(
-        "--num-epochs", type=int, default=20, help="Number of training epochs"
-    )
-    parser.add_argument(
-        "--grad-clip-value",
-        type=float,
-        default=1.0,
-        help="Maximum gradient norm for clipping",
-    )
-    parser.add_argument(
-        "--lambda-phy",
-        type=float,
-        default=0.1,
-        help="Weight for physics-informed loss term",
-    )
-
-    # Model architecture parameters
-    parser.add_argument(
-        "--d-model",
-        type=int,
-        default=8,
-        help="Dimension of model's internal representations",
-    )
-    parser.add_argument(
-        "--num-heads",
-        type=int,
-        default=2,
-        help="Number of attention heads in transformer layers",
-    )
-    parser.add_argument(
-        "--num-layers",
-        type=int,
-        default=2,
-        help="Number of transformer encoder layers",
-    )
-
-    return parser.parse_args()
+from utils.arguments import parse_args
+from utils.plots import plot_predictions, plot_training_comparison
+from utils.scripts import train_model
 
 
 def main():
@@ -454,6 +145,9 @@ def main():
         standard_criterion,
         device,
         hyperparameters,
+        physics_informed=False,
+        lambda_phy=args.lambda_phy,
+        grad_clip_value=args.grad_clip_value,
     )
 
     # Initialize physics-informed model and training components
@@ -477,6 +171,8 @@ def main():
         device,
         hyperparameters,
         physics_informed=True,
+        lambda_phy=args.lambda_phy,
+        grad_clip_value=args.grad_clip_value,
     )
 
     # Compare training histories

@@ -29,8 +29,14 @@ def validate(
     model.eval()
     total_val_loss = 0.0
 
+    val_pbar = tqdm(
+        val_dataloader,
+        desc="Validation",
+        leave=False,
+    )
+
     with torch.no_grad():
-        for t_seq, context, target in val_dataloader:
+        for t_seq, context, target in val_pbar:
             t_seq = t_seq.to(device)
             context = context.to(device)
             target = target.to(device)
@@ -43,6 +49,7 @@ def validate(
             else:
                 loss = criterion(pred, target)
             total_val_loss += loss.item()
+            val_pbar.set_postfix({"val_loss": f"{loss.item():.6f}"})
 
     return total_val_loss / len(val_dataloader)
 
@@ -94,40 +101,69 @@ def train_epoch(
         data_loss = criterion(pred, target)
 
         if physics_informed:
-            # Physics-informed loss computation
+            # Physics-informed loss computation for predictions and ground truth
             x_pred, v_pred, a_pred = pred[..., 0], pred[..., 1], pred[..., 2]
+            x_true, v_true, a_true = (
+                target[..., 0],
+                target[..., 1],
+                target[..., 2],
+            )
             B, T_steps = x_pred.shape
-            t_flat = t_seq.view(-1)
-            x_flat, v_flat = x_pred.view(-1), v_pred.view(-1)
 
-            # Compute gradients for physics constraints
-            grad_x = torch.autograd.grad(
-                x_flat,
-                t_flat,
-                grad_outputs=torch.ones_like(x_flat),
-                create_graph=True,
-                retain_graph=True,
-                allow_unused=True,
-            )[0]
-            grad_v = torch.autograd.grad(
-                v_flat,
-                t_flat,
-                grad_outputs=torch.ones_like(v_flat),
-                create_graph=True,
-                retain_graph=True,
-                allow_unused=True,
-            )[0]
+            # Initialize physics residuals for both predictions and ground truth
+            res_x_pred = torch.zeros_like(x_pred)
+            res_v_pred = torch.zeros_like(v_pred)
+            res_x_true = torch.zeros_like(x_true)
+            res_v_true = torch.zeros_like(v_true)
 
-            grad_x = torch.zeros_like(x_flat) if grad_x is None else grad_x
-            grad_v = torch.zeros_like(v_flat) if grad_v is None else grad_v
+            # Compute gradients for each batch
+            for b in range(B):
+                # Compute gradients for predictions
+                grad_x_pred = torch.autograd.grad(
+                    x_pred[b],
+                    t_seq[b],
+                    grad_outputs=torch.ones_like(x_pred[b]),
+                    create_graph=True,
+                    retain_graph=True,
+                    allow_unused=True,
+                )[0]
 
-            grad_x = grad_x.view(B, T_steps)
-            grad_v = grad_v.view(B, T_steps)
+                grad_v_pred = torch.autograd.grad(
+                    v_pred[b],
+                    t_seq[b],
+                    grad_outputs=torch.ones_like(v_pred[b]),
+                    create_graph=True,
+                    retain_graph=True,
+                    allow_unused=True,
+                )[0]
 
-            # Physics residuals
-            res_x = grad_x - v_pred  # dx/dt = v
-            res_v = grad_v - a_pred  # dv/dt = a
-            physics_loss = res_x.pow(2).mean() + res_v.pow(2).mean()
+                # Physics residuals for predictions
+                grad_x_pred = (
+                    torch.zeros_like(x_pred[b])
+                    if grad_x_pred is None
+                    else grad_x_pred
+                )
+                grad_v_pred = (
+                    torch.zeros_like(v_pred[b])
+                    if grad_v_pred is None
+                    else grad_v_pred
+                )
+
+                # Physics residuals
+                res_x_pred[b] = grad_x_pred - v_pred[b]  # dx/dt = v
+                res_v_pred[b] = grad_v_pred - a_pred[b]  # dv/dt = a
+                res_x_true[b] = v_true[b]  # Known: dx/dt = v
+                res_v_true[b] = a_true[b]  # Known: dv/dt = a
+
+            # Compute physics loss comparing prediction residuals with ground truth
+            physics_loss = (
+                (
+                    (res_x_pred - res_x_true).pow(2).mean()
+                    + (res_v_pred - res_v_true).pow(2).mean()
+                )
+            ) / 2
+
+            # Combine data loss and physics loss
             loss = data_loss + lambda_phy * physics_loss
         else:
             loss = data_loss
@@ -147,6 +183,7 @@ def train_model(
     model,
     train_dataloader,
     val_dataloader,
+    test_dataloader,
     optimizer,
     criterion,
     device,

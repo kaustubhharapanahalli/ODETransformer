@@ -39,6 +39,18 @@ def main():
     2. Trains both standard and physics-informed models
     3. Compares and evaluates model performances
     """
+    # Set random seeds for reproducibility
+    SEED = 42
+    np.random.seed(SEED)
+    torch.manual_seed(SEED)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed(SEED)
+        torch.cuda.manual_seed_all(SEED)
+        torch.backends.cudnn.deterministic = True
+        torch.backends.cudnn.benchmark = False
+    if torch.backends.mps.is_available():
+        torch.mps.manual_seed(SEED)
+
     args = parse_args()
 
     # Set device
@@ -180,7 +192,6 @@ def main():
     plot_training_comparison(standard_history, physics_history)
     print("\nComparison results saved in 'results_comparison' directory")
 
-    # Evaluate both models on test sample
     # Evaluate both models on test sample
     for model_type, model, save_dir in [
         ("Standard", standard_model, standard_dir),

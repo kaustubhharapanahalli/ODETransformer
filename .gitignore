@@ -149,3 +149,6 @@ data/
 *.npy
 *.npz
 experiments/
+
+# macOS system files
+.DS_Store
